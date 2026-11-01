@@ -1,0 +1,283 @@
+# Extract exam questions and exact answers
+
+**Session ID:** ses_e67cbe811ffe4wlqb9bJX57M8t
+**Created:** 11/1/2026, 6:41:53 PM
+**Updated:** 11/1/2026, 6:45:02 PM
+
+---
+
+## User
+
+extract all exam questions of the notebook and give an exact answer
+
+---
+
+## Assistant
+
+I detect a research/extraction intent — you want the exam questions from a notebook answered exactly. My approach: locate the notebook, read it, extract questions, then answer based on notebook content.
+
+**Tool: bash**
+
+**Tool: glob**
+
+---
+
+## Assistant
+
+Seven notebooks exist. Let me identify which contains exam questions.
+
+**Tool: bash**
+
+**Tool: bash**
+
+---
+
+## Assistant
+
+**Tool: bash**
+
+---
+
+## Assistant
+
+**Tool: bash**
+
+---
+
+## Assistant
+
+**Tool: bash**
+
+---
+
+## Assistant
+
+Multiple notebooks contain exam-style sections. Let me check which ones and gather their measured outputs so answers are exact.
+
+**Tool: bash**
+
+---
+
+## Assistant
+
+**Tool: bash**
+
+**Tool: bash**
+
+**Tool: bash**
+
+**Tool: bash**
+
+---
+
+## Assistant
+
+**Tool: read**
+
+---
+
+## Assistant
+
+**Tool: read**
+
+---
+
+## Assistant
+
+**Tool: read**
+
+---
+
+## Assistant
+
+**Tool: read**
+
+---
+
+## Assistant
+
+**Tool: bash**
+
+---
+
+## Assistant
+
+The repo contains **four** notebooks with exam-relevant question sets. I extracted every question and answered all of them below, using the measured numbers stored in the notebooks where available. (If you only meant one specific notebook, tell me which and I’ll trim it.)
+
+- `session-04/02_file_formats_and_pickle.ipynb` → §9 Exam-style questions (6)
+- `session-04/03_duckdb_database.ipynb` → §12 Exam-style questions (6)
+- `session-04/04_spark_fundamentals_and_ml.ipynb` → Exam-style questions (12)
+- `session-02/02_spark_fundamentals.ipynb` → Exit Ticket, “representative of exam questions” (4)
+- `session-01/01_do_you_need_a_cluster.ipynb` → §8 Discussion, “typical exam questions” (4)
+
+---
+
+# A. Session 4 · Lab B — CSV vs. pickle vs. Parquet
+Source: `session-04/02_file_formats_and_pickle.ipynb`, §9
+
+### A1. Three concrete disadvantages of CSV, with measured effects
+1. **Much larger files.** CSV was **101 MB**; Parquet snappy **26 MB**, Parquet zstd **22 MB** (≈4–5× larger).
+2. **Much slower I/O.** CSV write **2.71 s**, read **0.74 s**; Parquet write **0.19 s**, read **0.02 s** (≈14× slower write, ≈37× slower read).
+3. **Types are lost.** After the CSV round trip, both datetime columns came back as `str`, and `int32` columns became `int64`; `category` and nullable `Int8` are not preserved. It also adds an unwanted `Unnamed: 0` index column unless `index=False`.
+4. (Bonus) **No column pruning or predicate pushdown.** CSV must read all 19 columns and all rows; Parquet can read only the needed columns and skip row groups.
+
+### A2. Which formats keep `category` and nullable integers?
+**pickle and Parquet keep them; CSV does not.** Parquet stores the logical/physical schema; pickle stores the Python object and its dtype metadata. CSV is plain text with no schema, so pandas must re-infer types on every read and cannot recover `category`, nullable `Int8`, or datetimes — they degrade to `str`, `float64`/`int64`.
+
+### A3. Why does Parquet scale better when only 3 of 19 columns of a 50 GB dataset are needed?
+Because Parquet is **columnar**: it stores each column separately, so only the 3 required column chunks are read and decompressed. It also stores **row-group statistics (min/max)**, so whole row groups that cannot match a filter are skipped. The 50 GB file is never fully loaded. pickle is a single opaque blob: it must read, decompress, and deserialize **all rows and all columns** into RAM before any filtering — all-or-nothing. That is why pickle can be fast on small data but does not scale; speed on small data is not the same as scalability.
+
+### A4. How to save the scikit-learn model for a server batch job in six months?
+Save it with **joblib** (pickle-based, efficient for NumPy arrays), preferably as a bundle. Store at minimum:
+1. the **scikit-learn version**, and
+2. the **Python version**.
+
+(The notebook’s bundle also stores the feature list/order and a training-data description.) Reason: a pickle stores *references* to classes, not their code; a different scikit-learn/Python version can produce warnings, wrong behaviour, or errors.
+
+### A5. Risk of `pickle.load` on `best_model.pkl` downloaded from a forum
+Unpickling can **execute arbitrary code**: an object’s `__reduce__` can name any callable, so loading a malicious pickle can run e.g. `os.system` and compromise the machine. The demo payload was only **109 bytes** and still ran code during loading. Rule: only load pickles you created or fully trust; share data as Parquet and models via safe formats such as ONNX or Spark’s native save format.
+
+### A6. True or false: “pickle is the best format for large datasets because it is fastest to read.”
+**False.** pickle is fastest only on small data because it is a near-raw memory dump and the whole file fits in RAM. For large datasets it must load everything (no projection, no predicate pushdown), is uncompressed by default, is Python-only, is version-fragile, and is unsafe. Parquet’s columnar layout, compression, and row-group statistics are what scale.
+
+---
+
+# B. Session 4 · Lab C — DuckDB
+Source: `session-04/03_duckdb_database.ipynb`, §12
+
+### B1. `duckdb.connect()` vs. `duckdb.connect("taxi.duckdb")`
+- `duckdb.connect()` creates an **in-memory, transient** database. It disappears when the process ends. Use it for quick ad-hoc queries on Parquet files in one session.
+- `duckdb.connect("taxi.duckdb")` opens/creates a **persistent single-file database**. Tables survive closing Python and can be reopened later. Use it for a local analytics database, a repeatable batch job, or sharing one database file.
+
+### B2. Why is DuckDB “embedded”? One advantage and one limitation
+It runs as a **library inside your Python process** — there is no separate database server. 
+- **Advantage:** zero installation/administration, no network round trips, very fast in-process access, one portable file.
+- **Limitation:** only **one process may write** the file at a time (many readers are possible only in read-only mode). No concurrent multi-user writes, and it is confined to one machine.
+
+### B3. Is one DuckDB file good for 30 analysts writing every few seconds?
+**No.** DuckDB allows many readers **or one writer**; concurrent writes serialize/lock the file (the notebook demonstrates a second process failing with an `IOException` lock error). For many concurrent writers, use a **database server such as PostgreSQL** (or another client/server DB). A lakehouse/Spark is only needed if the data volume itself demands distribution.
+
+### B4. `CREATE TABLE ... AS SELECT` vs. `VIEW`
+- **CTAS table:** materializes and stores the result **inside the database** at creation time. New rows inserted into `trips` afterwards are **not** reflected; the table is a snapshot until rebuilt.
+- **View:** stores only the **query text**, no data. It is always up to date and reflects new rows in `trips` immediately; it costs no disk space but is recomputed on each query.
+
+### B5. `DELETE ...` inside a transaction, then `ROLLBACK` — how many rows?
+After `ROLLBACK`, `trips` has **5,972,150 rows** — the same as before the transaction. (Inside the transaction it had dropped to 5,119,705.) This demonstrates **Atomicity**: the transaction is all-or-nothing; the delete is completely undone.
+
+### B6. Why is the `.duckdb` file the same order of magnitude as Parquet, while CSV would be much larger?
+Measured: `.duckdb` **348 MB** vs. Parquet input **100 MB** (≈3.5× — same order of magnitude). Both store **columnar, compressed** data, so neither pays CSV’s row-oriented, uncompressed text overhead. DuckDB’s extra size comes from storing the 12 selected columns (including the computed `duration_min`) plus its own row/version metadata and compression choices. A CSV export would be several times larger because every value is serialized as uncompressed text, row by row (in Lab B, a 1M-row CSV was 101 MB vs. 22–26 MB Parquet, ≈4–5×).
+
+---
+
+# C. Session 4 · Lab D — Spark fundamentals + ML
+Source: `session-04/04_spark_fundamentals_and_ml.ipynb`, Exam-style questions
+
+## Part 1 — Spark fundamentals
+
+### C1. “Three lines, so Spark ran three operations immediately.” Is she right?
+**No.** `filter`, `select`, and `groupBy().count()` are all **transformations**. They only build the logical plan; `groupBy` is wide but still lazy. **Nothing executes until an action** such as `show`, `count`, `collect`, or `write`. Catalyst optimizes the entire chain into one job when the action is called.
+
+### C2. `groupBy("PULocationID").count()` on 8 partitions — why a shuffle, and what do the two `HashAggregate` steps do?
+`groupBy` is a **wide transformation**: the same `PULocationID` values are scattered across the 8 input partitions, so all rows with the same key must be brought to the same partition → an `Exchange` (**shuffle**) by `hash(PULocationID)`.
+- **First `HashAggregate` (partial):** runs locally in each input partition and pre-aggregates counts per key, reducing the amount of data that must be shuffled.
+- **Second `HashAggregate` (final):** runs after the shuffle and merges the partial counts into one final count per `PULocationID`.
+
+With 8 partitions you get up to 8 partial aggregates, then the shuffle, then the final merge.
+
+### C3. `df.filter(fare_amount > 50).show(10)` returns 10 rows — did Spark read only 10 rows?
+**No.** `show(10)` is an **action**; it starts a job and scans partitions/row groups, applying the pushed-down filter, until it has collected 10 rows (`take`), then stops. It does **not** read exactly 10 rows: it may read entire partitions or row groups, and how much it reads depends on data layout. Predicate pushdown and row-group min/max statistics let it skip data, but the number of rows read is not 10. This matters because `show`/`count` trigger real work; `limit` plus filters enable early stopping, while `count` reads everything.
+
+### C4. Joining 3M trips with the 265-row zone table — why `BroadcastHashJoin`, and what can go wrong?
+The zone table is tiny (265 rows), far below `spark.sql.autoBroadcastJoinThreshold` (default **10 MB**). Spark therefore **broadcasts** it to every executor and builds an in-memory hash table there.
+- **Benefit vs. `SortMergeJoin`:** the 3M-row side does **not** need to be shuffled or sorted; only the small table is replicated. Much lower network and latency cost for a small×large join.
+- **Risk:** broadcasting a genuinely large table duplicates it on every executor → driver/executor **out-of-memory**, network saturation, or broadcast timeout. Only broadcast tables that are actually small (and raise the threshold only deliberately).
+
+## Part 2 — Spark ML
+
+### C5. `read.csv` returned instantly; `count()` took much longer. Why? What changes with `inferSchema=True`?
+`read.csv` is a **transformation** — it returns a DataFrame lazily and reads no data; only the plan is created. `count()` is an **action**, so the file is actually scanned. With `inferSchema=True`, Spark must read the file once at `read.csv` time to infer column types, so the previously instant call itself becomes a job and takes longer. With an explicit schema, that inference pass is avoided and `read.csv` stays cheap.
+
+### C6. Why is `fare_amount`/`total_amount` not allowed as a feature? Name the general problem.
+Because they are only known **after the ride** (at drop-off; `total_amount` also includes tip, tolls, and extras). Using them to predict duration leaks the outcome: the model learns from information unavailable at prediction time and reports unrealistically good performance that will not hold in production. The general problem is **target/data leakage** (using post-outcome features).
+
+### C7. Transformer or Estimator: `StringIndexer`, `OneHotEncoder`, `VectorAssembler`, `LinearRegression`? What does `Pipeline.fit()` return?
+- `StringIndexer` → **Estimator** (fit learns the category→index mapping).
+- `OneHotEncoder` → **Estimator** (fit produces an `OneHotEncoderModel`; in Spark 3+/4).
+- `VectorAssembler` → **Transformer** (no fit; it just assembles columns).
+- `LinearRegression` → **Estimator** (fit produces a `LinearRegressionModel`).
+
+`Pipeline.fit()` returns a **`PipelineModel`** — a fitted Transformer containing all fitted stages; call `.transform(df)` on it.
+
+### C8. Why does the linear model need one-hot encoding for `hour`, but gradient-boosted trees do not?
+A linear model is linear in its inputs; one-hot encoding gives each category its own independent coefficient and avoids imposing a false numeric order (hour 23 is not “twice” hour 11.5, and weekday/IDs are labels). Trees split on **thresholds**, so they can model arbitrary non-linear/step effects and interactions directly on raw `hour`, `weekday`, or IDs; one-hot would only add sparse columns without giving the tree new information.
+
+### C9. `CrossValidator` with 3 × 2 parameter values and `numFolds=5`: how many models are trained? Why tune on a sample?
+**3 × 2 × 5 = 30 model fits**, plus one final refit of the best combination on the full training set = **31 fits total**. (The notebook’s own run used 2×2×3 = 12 + 1.) Tuning on a sample because 30 fits on the full 12.7M-row dataset would take too long and consume too much memory; a sample still ranks the hyperparameters reliably at a fraction of the cost.
+
+### C10. Teammate wants to `pickle.dump()` a Spark `PipelineModel`. What do you tell them?
+**Don’t.** A Spark `PipelineModel` is only a thin Python wrapper around objects that live in the **JVM**; Python pickle cannot serialize that JVM state and will not produce a portable, reloadable model. Use Spark’s own format:
+```python
+model.write().overwrite().save(path)
+PipelineModel.load(path)
+```
+It writes a folder of JSON metadata + Parquet files and can be loaded from Python, Scala, or Java.
+
+### C11. Spark 4 ANSI mode: what happens with `F.col("a") / F.col("b")` when `b == 0`, and how do you avoid it?
+With ANSI mode enabled (default in Spark 4), division by zero throws a **divide-by-zero error** (`ArithmeticException` / `DIVIDE_BY_ZERO`) and fails the job, instead of returning `NULL`. Avoid it with:
+- `F.try_divide("a", "b")` → returns `NULL` on division by zero,
+- `F.when(F.col("b") != 0, F.col("a") / F.col("b"))`,
+- `F.col("a") / F.nullif("b", 0)`.
+
+Disabling ANSI (`spark.sql.ansi.enabled=false`) is possible but not recommended.
+
+### C12. 2 GB of data on a 16 GB laptop: Spark, DuckDB, or pandas + scikit-learn?
+**Not Spark.** 2 GB fits easily in 16 GB, and Spark’s JVM startup, shuffle, serialization, and scheduling overhead buy nothing on a single machine.
+- **DuckDB** is the best default for SQL/analytics: columnar, compressed, out-of-core, minimal setup, very fast on one node.
+- **pandas + scikit-learn** is fine if the workflow is Python ML and the data fits in RAM (2 GB does, though pandas may use several× that); it is simpler for scikit-learn pipelines.
+- **Spark** only when the data exceeds one machine or you must scale out/distribute.
+
+---
+
+# D. Session 2 — Exit Ticket
+Source: `session-02/02_spark_fundamentals.ipynb`, “representative of exam questions”
+
+These are the same four questions as C1–C4, with slightly different wording:
+
+### D1. `df2 = df.filter(...)`, `df3 = df2.select(...)`, `df4 = df3.groupBy(...).count()` — did Spark run three operations immediately?
+**No.** All three are lazy transformations; execution starts only at an action (`show`, `count`, `collect`, `write`). The whole chain is optimized and executed as one job.
+
+### D2. `groupBy("PULocationID").count()` on 8 partitions — why a shuffle, and what do the two `HashAggregate` steps do?
+`groupBy` is wide, so rows with the same key must be co-located → `Exchange`/shuffle by hash of `PULocationID`. The first `HashAggregate` partially aggregates within each input partition before the shuffle; the second merges the partial results into one final count per key after the shuffle.
+
+### D3. `df.filter(fare_amount > 50).show(10)` returns 10 rows — did Spark read only 10 rows?
+**No.** `show(10)` is an action that scans partitions/row groups until 10 rows are collected, then stops. It may read whole partitions or row groups, not exactly 10 rows; predicate pushdown and row-group statistics reduce what is read. It is not a free peek — it triggers a real job.
+
+### D4. 3M trips joined with the 265-row zone table — why `BroadcastHashJoin`? Benefit? Risk?
+The 265-row table is far below the default 10 MB `autoBroadcastJoinThreshold`, so Spark broadcasts it to every executor and builds an in-memory hash table. This avoids shuffling and sorting the 3M-row side — much faster than `SortMergeJoin` for a small×large join. The risk is memory: broadcasting a very large table duplicates it on every executor and can cause OOM, network saturation, or broadcast timeout.
+
+---
+
+# E. Session 1 — Discussion (“typical exam questions”)
+Source: `session-01/01_do_you_need_a_cluster.ipynb`, §8
+
+### E1. Why are Polars and DuckDB faster even on the same single machine?
+Because their heavy work runs in **native code (Rust/C++) outside the GIL** and uses **all CPU cores**; pandas is mostly single-threaded. They also use a **columnar (Arrow) layout** with vectorized/SIMD execution and cache-friendly access, **lazy query plans** with projection/predicate pushdown, and avoid per-row Python-object overhead. pandas is eager, loads all columns, and carries DataFrame/object overhead.
+
+### E2. How many months of taxi data could this machine handle with DuckDB? What limits it?
+DuckDB **streams from disk and spills to disk**, so RAM is not the hard limit. Roughly, each month is ~50 MB Parquet (~3M trips). A machine with `F` GB free disk can hold about `F / 0.05` months if kept as Parquet (e.g., 100 GB ≈ 2,000 months). A materialized `.duckdb` table is larger (in Lab C, 348 MB vs. 100 MB Parquet, ≈3.5×), so divide accordingly. **Disk capacity** sets the maximum volume; **CPU** sets the speed; **RAM** is a soft limit that affects how much can be processed without spilling.
+
+### E3. Two situations where a single machine is not enough, even with DuckDB
+1. **Data volume/compute exceeds one machine:** the data cannot fit on local disk or cannot be processed in acceptable time on one node’s cores → distributed storage/compute (Spark).
+2. **Concurrency, fault tolerance, or availability:** many concurrent writers/users, or the workload cannot tolerate a single point of failure. DuckDB allows only one writer, and one machine has no built-in redundancy.
+
+(Also valid: streaming/real-time ingest, geographically distributed data, or cost-effective horizontal scaling.)
+
+### E4. Big Data is not only Volume. Which other Vs did today’s lab ignore completely?
+Primarily **Veracity** (data quality: dirty values, duplicates, missing data — the lab does not analyze data quality) and **Velocity** (streaming/real-time — everything here is batch). It also largely ignores **Variety** (multiple source systems/semi-structured data; only one taxi table is used) and **Value** (business usefulness). So the lab focused on Volume and performance, not the other Vs.
+
+---
+
+*Note: `session-01/00_warmup_threads_vs_processes.ipynb` and `session-01/02_bonus_python_without_gil.ipynb` also contain in-lab “Question” prompts (GIL/threads/processes), but those are not labeled as exam questions. Say the word if you want those answered too.*
+
+---
+
