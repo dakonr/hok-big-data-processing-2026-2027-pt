@@ -3,13 +3,13 @@
 
 The repo contains **four** notebooks with exam-relevant question sets. I extracted every question and answered all of them below, using the measured numbers stored in the notebooks where available. (If you only meant one specific notebook, tell me which and I’ll trim it.)
 
-- `session-04/02_file_formats_and_pickle.ipynb` → §9 Exam-style questions (6)
+<!-- - `session-04/02_file_formats_and_pickle.ipynb` → §9 Exam-style questions (6)
 - `session-04/03_duckdb_database.ipynb` → §12 Exam-style questions (6)
 - `session-04/04_spark_fundamentals_and_ml.ipynb` → Exam-style questions (12)
 - `session-02/02_spark_fundamentals.ipynb` → Exit Ticket, “representative of exam questions” (4)
 - `session-01/01_do_you_need_a_cluster.ipynb` → §8 Discussion, “typical exam questions” (4)
 
----
+--- -->
 
 # A. Session 4 · Lab B — CSV vs. pickle vs. Parquet
 Source: `session-04/02_file_formats_and_pickle.ipynb`, §9
@@ -176,7 +176,49 @@ Primarily **Veracity** (data quality: dirty values, duplicates, missing data —
 
 ---
 
-*Note: `session-01/00_warmup_threads_vs_processes.ipynb` and `session-01/02_bonus_python_without_gil.ipynb` also contain in-lab “Question” prompts (GIL/threads/processes), but those are not labeled as exam questions. Say the word if you want those answered too.*
+# F. Session 1 — Warm-up questions (threads vs. processes)
+Source: `session-01/00_warmup_threads_vs_processes.ipynb`, §1–§2
+
+### F1. Threads and processes are equally fast for the chores. Why doesn’t the GIL matter for waiting?
+Because the chores only **wait** (`time.sleep`) — they do almost no Python bytecode work. The GIL only prevents two threads from executing Python bytecode at the same time; a thread **releases the GIL while it is blocked** in sleep/disk/network I/O, so the other threads can run during the wait. With serial execution the total is 8 + 2 + 4 = **14 s**; with threads or processes the total is ≈ the longest chore = **8 s**. Both achieve the same overlap. Processes are equally fast because waiting needs no interpreter parallelism at all — the GIL is simply irrelevant for I/O waits.
+
+### F2. Why do threads bring no speed-up for the CPU-bound work? What limits the process speed-up?
+`cpu_heavy` is **pure Python, CPU-bound** code. The GIL allows only **one thread at a time** to execute Python bytecode, so 4 threads simply take turns on one interpreter → speed-up ≈ **1.0×**, even on 12 cores. Processes each have their **own interpreter and GIL**, so they can run truly in parallel on separate cores. The process speed-up is limited by:
+- the number of jobs: `JOBS = 4`, so at most **4×**;
+- the number of **physical cores** — with `Thread(s) per core = 2`, two vCPUs share one physical core, and pure computation gains little from hyperthreading;
+- process startup and **IPC/pickling** overhead, memory bandwidth, and load imbalance.
+
+So the realistic maximum is ≈ `min(JOBS, physical cores)`. (In the stored output the process run failed on spawn because the worker function was not importable from the notebook `__main__`; that is a separate macOS/Windows process-startup issue, not the GIL.)
+
+---
+
+# G. Session 1 — Bonus questions (Python without the GIL)
+Source: `session-01/02_bonus_python_without_gil.ipynb`, §5
+
+### G1. In the first two runs, 4 threads are no faster than 1 thread (speed-up ≈ 1.0×). Why?
+Because the **GIL is still enabled in both runs**:
+- run 1 is the normal Python 3.12 build (the GIL can never be switched off);
+- run 2 is the free-threaded 3.14t build, but started with `PYTHON_GIL=1`, which turns the GIL back on.
+
+The benchmark is CPU-bound pure Python, so only one thread can hold the GIL and execute bytecode at a time; the four threads serialize. Note that the speed-up column compares **threads vs. serial within the same run**, not one run against another.
+
+### G2. What limits the speed-up of run 3 (GIL off)?
+With the GIL off, threads really run in parallel, but:
+- the benchmark uses `JOBS = 4`, so the absolute ceiling is **4×**;
+- the machine’s **physical cores** are the real limit. If there are fewer than 4 physical cores, or if two “CPUs” are hyperthreads sharing one core (`Thread(s) per core = 2`), pure computation gains little from SMT and the speed-up stays below 4×;
+- thread startup, memory bandwidth, and uneven work distribution also reduce it.
+
+So the practical maximum is ≈ `min(JOBS, physical cores)`.
+
+### G3. Compare the serial times of run 1 and run 3. Which difference explains it — the Python version or the GIL? Why could removing the GIL cost something?
+The **Python version** explains it. Python 3.11+ introduced a much faster interpreter (adaptive specializing interpreter, cheaper calls, etc.), so 3.14 executes the single-threaded benchmark faster than 3.12. Turning the GIL off does **not** speed up single-threaded code. Removing the GIL can cost something because the free-threaded build adds overhead — biased/per-object reference counting, deferred reference counting, object “immortality”, and extra synchronization — so single-thread performance may be slightly slower (3.13 was experimental and had the larger penalty; 3.14 reduced it). In addition, C extensions not marked free-threading-safe **re-enable the GIL** and print a warning, and memory overhead is higher.
+
+### G4. Polars, DuckDB and Spark were fast in the main lab with the normal Python build. How do they avoid the GIL problem without a free-threaded Python?
+They do the heavy work in **native code outside the Python interpreter**, so Python threads are not the parallelism mechanism:
+- **Polars** is implemented in **Rust** (Arrow); **DuckDB** in **C++**. Both release the GIL while running their multi-threaded native kernels and use all cores; Python only builds the query and receives the result.
+- **Spark** executes on the **JVM**: PySpark sends the plan to JVM executors, and the data processing happens entirely in Java/Scala, outside Python. (Python UDFs are the exception — they ship rows to a Python process and are much slower.)
+
+So there is no Python bytecode competing for the GIL; parallelism comes from native thread pools/JVMs/processes.
 
 ---
 
