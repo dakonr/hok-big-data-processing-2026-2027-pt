@@ -1,21 +1,71 @@
 # Exam Questions
 **Big Data Processing (DPR.1) — FH Kufstein Tirol, WS 2026/27**
 
-Compiled from the course notebooks. The questions are ordered by **course progression** (Session 1 → Session 4), so you can study front to back. Every answer uses the measured values stored in the notebooks where available.
+Compiled from the course notebooks. The questions are ordered by **course progression** (setup → Session 1 → Session 4), so you can study front to back. Every answer uses the measured values stored in the notebooks where available.
 
 > **Duplicate note:** the Session 2 Exit Ticket asks exactly the same four Spark questions as Session 4 · Lab D, Part 1. They are merged into **Part 2** below and marked with both sources.
 
 ## Contents
 
+0. **Setup — Python environments & reproducibility** (E1–E5) — venv, pyenv, uv, requirements
 1. **Session 1 — Python concurrency & single-machine engines** (Q1–Q10)
    - 1.1 Warm-up: threads vs. processes (Q1–Q2)
    - 1.2 Do you really need a cluster? (Q3–Q6)
    - 1.3 Bonus: Python without the GIL (Q7–Q10)
-2. **Spark fundamentals** — Session 2 Exit Ticket + Session 4 · Lab D Part 1 (Q11–Q14)
+2. **Spark fundamentals** — Session 2 Exit Ticket + Session 4 · Lab D Part 1 (Q11–Q14, Q12b)
 3. **Session 4 · Lab B — CSV vs. pickle vs. Parquet** (Q15–Q20)
 4. **Session 4 · Lab C — DuckDB** (Q21–Q26)
 5. **Session 4 · Lab D Part 2 — Spark ML** (Q27–Q34)
 6. **Topic index** (quick lookup by concept)
+
+---
+
+# Part 0 — Setup · Python environments & reproducibility
+Source: `session-04/01_python_environments.md` (Lab A) · tested with the course's `.venv`, `pyenv` and `uv` workflow
+
+### E1. “I use pyenv, so I don’t need venv.” Why is this only half true?
+Because **pyenv and venv solve two different problems**, and pyenv only solves one of them:
+- **pyenv manages the *interpreter version*** — it installs several Python versions side by side and switches per folder via `.python-version` (project A → 3.12, project B → 3.10). It does **not** isolate installed packages: every project using the same pyenv Python shares the same `site-packages`, so a `pip install` in project A leaks into project B.
+- **venv isolates the *packages*** — it creates a project-local `.venv/` with its own `site-packages`, so project A can use `pandas 3` while project B stays on `pandas 2`.
+
+So “half true”: pyenv gives you the right **Python**, but not the right **packages**. In practice you combine them — `pyenv local 3.12` picks the interpreter, `python -m venv .venv` isolates the dependencies. (`uv` is the single tool that does both.)
+
+### E2. Notebook fails on the server with an `AttributeError` in pandas. Which two files should have been in the repository?
+1. **A dependency file with exact versions** — `requirements.txt` (or the full lock produced by `pip freeze > requirements-lock.txt`, or `uv.lock`). It lists the packages **and their pinned versions** (`pandas==2.2.2`, …).
+2. **A Python-version file** — `.python-version` (pyenv), or the version pinned in `pyproject.toml` / documented next to the requirements.
+
+An `AttributeError` in pandas is usually an **API change between versions** (an attribute/method added, renamed, or removed), so the server resolved a different pandas than your laptop. Pinning the **package versions** (file 1) and the **interpreter version** (file 2) makes the environment reproducible; without the Python pin, a newer interpreter can also pull different wheels. `requirements.txt` alone with loose specs is not enough — the lock/`==` pins are what make it deterministic.
+
+### E3. `.venv` is activated, `pip install duckdb` worked — Jupyter still says `ModuleNotFoundError`. Most likely cause, and how do you check it?
+**Most likely cause:** the notebook is running a **different kernel/interpreter** than the activated `.venv`. Activating the venv only changes `python`/`pip` in *that terminal*; the Jupyter kernel may still point at a global/system Python (or an old `python3` kernel). So `pip` installed `duckdb` into `.venv`, but the kernel imports from another `site-packages`.
+
+**How to check — in a notebook cell:**
+```python
+import sys, site
+print(sys.executable)   # interpreter running the kernel
+print(sys.prefix)       # should end in .venv
+print(site.getsitepackages())
+```
+Compare that with `which python` / `which pip` in the activated terminal and `.venv/bin/python`. `jupyter kernelspec list` shows the registered kernels. If `sys.executable` is **not** `.venv/bin/python`, the kernel is wrong.
+
+**Fix:** select the `.venv` kernel in the notebook (top right → *Select Kernel* → `.venv`), register it (`python -m ipykernel install --user --name .venv`), or start Jupyter from inside the venv (`python -m jupyter lab`).
+
+### E4. 25 students, three operating systems, the same Python 3.12 in 10 minutes, no admin rights: pyenv + venv or uv? Justify.
+**uv.** It wins on every constraint of the scenario:
+- **No admin rights, all three OS:** uv is a **single binary** installed into the user directory on macOS, Linux and Windows (`curl … | sh` / the PowerShell installer). No system package manager, no root.
+- **10 minutes:** uv **downloads a pre-built Python 3.12 in seconds** (`uv python install 3.12`) and creates the env with `uv venv --python 3.12`. `pyenv` **compiles CPython from source** on macOS/Linux (needs build tools, **3–10 min by itself**), which can blow the whole budget before a single package is installed.
+- **Same version everywhere:** `uv` installs identical pre-built Pythons; `pyenv` on Windows is a separate port (**pyenv-win**), so the three OSs do not behave the same.
+- **Fast, reproducible installs:** uv resolves/downloads in parallel and caches, and writes a real lock file (`uv.lock`). On campus Wi-Fi, plain `pip install` is the classic timeout — uv is exactly the lab's fix for that.
+- **One tool instead of two:** uv replaces **both** pyenv (Python versions) and venv (package isolation).
+
+`pyenv + venv` is the traditional stack and also works, but for a **10-minute, no-admin, three-OS** classroom it is slower to bootstrap and needs build dependencies. Trade-off: uv is newer, so the team must agree to use it.
+
+### E5. Why is `.venv/` in `.gitignore` while `requirements.txt` is committed?
+Because one is a **reproducible build artifact** and the other is the **recipe**:
+- **`.venv/`** is just a folder holding a machine-specific interpreter link, platform-specific compiled wheels, absolute paths, and hundreds of MB. It differs per OS and per machine (the course runs Windows, macOS and Linux), bloats the repo, and is rebuilt locally from the spec. So it must **never** be committed.
+- **`requirements.txt`** (and its lock file) is small, text-only and platform-independent: the list of **exact package versions**. Anyone can rebuild the same environment with `pip install -r requirements.txt`.
+
+Rule: **commit the recipe, ignore the generated environment** — the same idea as committing `package.json` but not `node_modules/`.
 
 ---
 
@@ -95,6 +145,18 @@ Sources: `session-02/02_spark_fundamentals.ipynb` (Exit Ticket) **and** `session
 - **Second `HashAggregate` (final):** runs after the shuffle and merges the partial counts into one final count per `PULocationID`.
 
 With 8 partitions you get up to 8 partial aggregates, then the shuffle, then the final merge.
+
+### Q12b. Narrow or wide: `filter`, `withColumn`, `groupBy().agg()`, `orderBy`, `select` — which create an `Exchange`?
+**Narrow (no shuffle, no `Exchange`)** — each output partition depends on at most one input partition:
+- `filter` — row-wise; partitions stay put.
+- `withColumn` — row-wise for simple expressions; stays narrow unless the expression itself needs a shuffle (e.g. a window function without matching partitioning).
+- `select` — projection/column subset; partitions stay put.
+
+**Wide (require an `Exchange` = shuffle):**
+- `groupBy().agg()` — the same key is scattered across partitions, so rows must be repartitioned by key (partial aggregate → `Exchange` → final aggregate), exactly as in Q12.
+- `orderBy` / `sort` — a **global** order needs range-partitioning, so Spark shuffles all rows into ordered partitions.
+
+Rule of thumb: **one input partition → one output partition = narrow**; **data crosses the network between partitions = wide**. Other wide operators: non-broadcast `join`, `distinct`, `repartition`, `dropDuplicates`.
 
 ### Q13. `df.filter(fare_amount > 50).show(10)` returns 10 rows. Did Spark read only 10 rows?
 **No.** `show(10)` is an **action**; it starts a job and scans partitions/row groups, applying the pushed-down filter, until it has collected 10 rows (`take`), then stops. It does **not** read exactly 10 rows: it may read entire partitions or row groups, and how much it reads depends on data layout. Predicate pushdown and row-group min/max statistics let it skip data, but the number of rows read is not 10. This matters because `show`/`count` trigger real work; `limit` plus filters enable early stopping, while `count` reads everything.
@@ -214,10 +276,12 @@ Disabling ANSI (`spark.sql.ansi.enabled=false`) is possible but not recommended.
 
 | Topic | Questions |
 |---|---|
+| Python environments (venv, pyenv, uv, requirements) | E1–E5 |
 | Python GIL, threads vs. processes | Q1, Q2, Q7–Q10 |
 | Single-machine engines (pandas, Polars, DuckDB) | Q3–Q6 |
 | Big Data 5 Vs | Q6 |
 | Spark lazy evaluation / transformations vs. actions | Q11, Q13, Q27 |
+| Narrow vs. wide transformations / `Exchange` | Q12, Q12b |
 | Spark shuffles and `HashAggregate` | Q12 |
 | Spark joins (`BroadcastHashJoin`) | Q14 |
 | File formats: CSV vs. pickle vs. Parquet | Q15–Q20 |
@@ -232,6 +296,7 @@ Disabling ANSI (`spark.sql.ansi.enabled=false`) is possible but not recommended.
 
 | Part | Notebook | Section |
 |---|---|---|
+| 0 | `session-04/01_python_environments.md` (Lab A, markdown) | §6 exam-style questions |
 | 1.1 | `session-01/00_warmup_threads_vs_processes.ipynb` | §1–§2 |
 | 1.2 | `session-01/01_do_you_need_a_cluster.ipynb` | §8 |
 | 1.3 | `session-01/02_bonus_python_without_gil.ipynb` | §5 |
